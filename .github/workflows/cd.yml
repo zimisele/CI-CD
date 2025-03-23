@@ -7,15 +7,48 @@ on:
       - completed
 
 jobs:
-
-  build:
-
-    runs-on: self-hosted
+  deploy:
+    runs-on: ubuntu-latest
 
     steps:
-    - name: Pull Docker image
-      run: sudo docker pull maselweni/cicd-pipeline:latest
-    - name: Delete Old docker container
-      run: sudo docker rm -f cicd-pipeline-container || true
-    - name: Run Docker Container
-      run: sudo docker run -d -p 8080:8080 --name cicd-pipeline-container maselweni/cicd-pipeline
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up AWS CLI
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Log in to AWS ECR
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Pull Docker image from ECR
+      run: |
+        docker pull 296274010522.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/demoecrs:latest
+
+    - name: SSH to EC2 and Deploy Docker image
+      uses: appleboy/ssh-action@v0.1.5
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ubuntu  # For Amazon Linux, use ec2-user. Adjust for other Linux distributions.
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          # Install Docker if not already installed
+          if ! command -v docker &> /dev/null
+          then
+            sudo yum update -y
+            sudo amazon-linux-extras install docker
+            sudo service docker start
+            sudo usermod -a -G docker ec2-user
+          fi
+
+          # Pull the Docker image from ECR
+          docker pull 296274010522.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/demoecrs:latest
+
+          # Stop and remove any existing containers
+          docker ps -a -q --filter "name=medici" | grep -q . && docker stop medici && docker rm medici
+
+          # Run the Docker container
+          docker run -d --name medici -p 80:80 296274010522.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/demoecrs:latest
